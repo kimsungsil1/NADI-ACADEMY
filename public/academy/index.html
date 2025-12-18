@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nadi Beauty Academy</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { background: #111827; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; }
+    .brand { font-weight: bold; color: #a855f7; }
+    main { padding: 16px; }
+    .card { background: #1f2937; border: 1px solid #334155; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    button { background: #a855f7; color: #fff; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    input, select, textarea { width: 100%; padding: 8px; margin: 4px 0 12px; border-radius: 4px; border: 1px solid #334155; background: #0b1220; color: #e2e8f0; }
+    video { width: 100%; max-height: 320px; border-radius: 8px; background: black; }
+    nav a { color: #e2e8f0; margin-right: 12px; cursor: pointer; text-decoration: none; }
+    .hidden { display: none; }
+    .flex { display: flex; gap: 12px; flex-wrap: wrap; }
+    .badge { display: inline-block; background: #334155; padding: 4px 8px; border-radius: 12px; margin-right: 4px; font-size: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    .angle { background: #0b1220; padding: 6px; border-radius: 6px; border: 1px dashed #334155; }
+    .watermark { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.5); color: #fff; padding: 4px 8px; border-radius: 6px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">NADI BEAUTY ACADEMY</div>
+    <nav id="nav"></nav>
+  </header>
+  <main>
+    <section id="login-view" class="card">
+      <h2>로그인</h2>
+      <form id="login-form">
+        <input name="email" placeholder="email" required />
+        <input name="password" type="password" placeholder="password" required />
+        <button type="submit">로그인</button>
+      </form>
+      <p>ADMIN: admin@nadi.com / admin123<br>COACH: coach@nadi.com / coach123<br>OWNER: owner@nadi.com / owner123<br>LEARNER: learner@nadi.com / learner123</p>
+    </section>
+
+    <section id="dashboard-view" class="hidden">
+      <h2>대시보드</h2>
+      <div id="dashboard-content"></div>
+    </section>
+
+    <section id="courses-view" class="hidden">
+      <div class="flex" style="align-items:center; justify-content:space-between;">
+        <h2>코스 목록</h2>
+        <input id="course-search" placeholder="태그/키워드 검색" style="max-width:240px;">
+      </div>
+      <div id="courses-list" class="grid"></div>
+    </section>
+
+    <section id="lesson-view" class="hidden"></section>
+
+    <section id="admin-view" class="hidden">
+      <h2>어드민 영역</h2>
+      <div id="admin-content"></div>
+    </section>
+  </main>
+
+  <script>
+    const state = { user: null, currentLesson: null, lessonData: null };
+
+    const views = {
+      login: document.getElementById('login-view'),
+      dashboard: document.getElementById('dashboard-view'),
+      courses: document.getElementById('courses-view'),
+      lesson: document.getElementById('lesson-view'),
+      admin: document.getElementById('admin-view')
+    };
+
+    const nav = document.getElementById('nav');
+
+    const showView = (name) => {
+      Object.values(views).forEach((v) => v.classList.add('hidden'));
+      views[name]?.classList.remove('hidden');
+      if (name === 'dashboard') loadDashboard();
+      if (name === 'courses') loadCourses();
+      if (name === 'admin') loadAdmin();
+    };
+
+    const api = async (url, options = {}) => {
+      const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'include', ...options });
+      if (!res.ok) throw new Error('요청 실패');
+      return res.json();
+    };
+
+    const renderNav = () => {
+      if (!state.user) { nav.innerHTML = ''; return; }
+      nav.innerHTML = `
+        <a onclick="showView('dashboard')">대시보드</a>
+        <a onclick="showView('courses')">코스</a>
+        ${state.user.role === 'ADMIN' ? '<a onclick="showView(\'admin\')">관리</a>' : ''}
+        <a id="logout-btn" href="#">로그아웃</a>
+      `;
+      document.getElementById('logout-btn').onclick = async (e) => {
+        e.preventDefault();
+        await api('/api/logout', { method: 'POST' });
+        state.user = null;
+        showView('login');
+      };
+    };
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      const payload = Object.fromEntries(form.entries());
+      try {
+        const data = await api('/api/login', { method: 'POST', body: JSON.stringify(payload) });
+        state.user = data.user;
+        renderNav();
+        showView('dashboard');
+      } catch (err) {
+        alert('로그인 실패');
+      }
+    });
+
+    const loadDashboard = async () => {
+      const container = document.getElementById('dashboard-content');
+      const { user } = state;
+      const data = await api('/api/dashboard');
+      if (user.role === 'LEARNER') {
+        container.innerHTML = `
+          <div class="card">내 진행률: ${data.progress.length}건 / 완료 ${data.progress.filter(p=>p.completedAt).length}</div>
+          <div class="card">미통과 퀴즈: ${data.quizResults.filter(q=>!q.passed).length}개</div>
+          <div class="card">재훈련 추천: ${(data.recommendations||[]).map(r=>r.reason).join(', ') || '없음'}</div>
+          <div class="card">제출 상태: ${data.submissions.map(s=>s.status).join(', ') || '제출 없음'}</div>
+        `;
+      } else if (user.role === 'COACH') {
+        container.innerHTML = '<div class="card">코칭 대시보드</div>';
+        await loadCoachPanel(container);
+      } else if (user.role === 'OWNER') {
+        container.innerHTML = `
+          <div class="card">지점 인원: ${data.learnerCount}</div>
+          <div class="card">수료율: ${data.completionRate}%</div>
+          <div class="card">평균 퀴즈: ${data.avgQuiz}점</div>
+          <div class="card">재훈련 대상: ${data.recommendations.length}명</div>
+          <div class="card">검토 대기: ${data.pendingSubmissions}</div>
+        `;
+      } else {
+        container.innerHTML = (data.branchStats||[]).map(b => `
+          <div class="card">
+            <strong>${b.branch.name}</strong><br>
+            수료율 ${b.completionRate}% | 평균 ${b.avgQuiz}점 | 재훈련 ${b.recommendations}건 | 대기 ${b.pendingSubmissions}
+          </div>
+        `).join('');
+      }
+    };
+
+    const loadCourses = async () => {
+      const list = document.getElementById('courses-list');
+      const keyword = document.getElementById('course-search').value;
+      const data = await api(`/api/courses${keyword ? `?q=${encodeURIComponent(keyword)}` : ''}`);
+      list.innerHTML = data.courses.map(c => `
+        <div class="card">
+          <h3>${c.title}</h3>
+          <p>${c.description}</p>
+          <p>트랙: ${c.trackType}</p>
+          <div>${(c.lessons||[]).map(l=>`<span class="badge">${l.title}</span>`).join('')}</div>
+          <button onclick="loadLesson('${c.lessons[0]?.id || ''}')">첫 레슨 시작</button>
+        </div>
+      `).join('');
+    };
+
+    document.getElementById('course-search').addEventListener('input', () => {
+      loadCourses();
+    });
+
+    window.loadLesson = async (lessonId) => {
+      if (!lessonId) return;
+      state.currentLesson = lessonId;
+      const data = await api(`/api/lessons/${lessonId}`);
+      state.lessonData = data;
+      const container = views.lesson;
+      const water = `${state.user.name} / ${state.user.branchId}`;
+      container.innerHTML = `
+        <div class="card">
+          <a onclick="showView('courses')">← 코스로 돌아가기</a>
+          <h2>${data.lesson.title}</h2>
+          <p>${data.lesson.summary}</p>
+          <div style="position:relative;">
+            <video id="lesson-video" controls src="${data.lesson.videoUrl}"></video>
+            <div class="watermark">${water}</div>
+          </div>
+          <div class="flex">${data.lesson.tags.map(t=>`<span class='badge'>${t}</span>`).join('')}</div>
+          <div class="card">
+            <h4>챕터</h4>
+            ${data.chapters.map(ch=>`<div><button onclick=\"seekTo(${ch.startSec})\">${ch.title}</button></div>`).join('')}
+          </div>
+          <div class="card">
+            <h4>진행률</h4>
+            <div id="progress-display">${data.progress ? data.progress.percent : 0}%</div>
+          </div>
+          <div class="card">
+            <h4>체크포인트 퀴즈</h4>
+            <form id="quiz-form">
+              ${(data.questions||[]).map(q=>`
+                <div class='card'>
+                  <p>${q.prompt}</p>
+                  ${(q.choices||[]).map(choice=>`
+                    <label><input type='radio' name='${q.id}' value='${choice}' required> ${choice}</label><br>
+                  `).join('')}
+                </div>
+              `).join('')}
+              <button type='submit'>제출</button>
+            </form>
+            <div id="quiz-result"></div>
+          </div>
+          ${data.assignment ? `
+          <div class="card">
+            <h4>실습 과제: ${data.assignment.title}</h4>
+            <div class="flex">${data.assignment.angleGuide.map(a=>`<div class='angle'>${a}</div>`).join('')}</div>
+            <form id="assignment-form">
+              <input type="file" id="assignment-files" multiple accept="image/*,video/*" />
+              <button type="submit">제출</button>
+            </form>
+            <div id="assignment-status"></div>
+          </div>
+          `:''}
+          <div class="card">
+            <h4>SOP 체크</h4>
+            ${(data.sopDocs||[]).map(doc=>`<div class='card'><strong>${doc.title} (v${doc.version})</strong><p>${doc.content}</p><button onclick=\"ackSop('${doc.id}')\">읽음</button></div>`).join('')}
+          </div>
+          <div class="card">
+            <h4>재훈련 추천</h4>
+            ${(data.recommendations||[]).map(r=>`<div>${r.reason}</div>`).join('') || '없음'}
+          </div>
+        </div>
+      `;
+      Object.values(views).forEach(v=>v.classList.add('hidden'));
+      container.classList.remove('hidden');
+
+      const video = document.getElementById('lesson-video');
+      video.addEventListener('timeupdate', () => {
+        const percent = Math.round((video.currentTime / video.duration) * 100);
+        document.getElementById('progress-display').textContent = `${percent}%`;
+        if (percent % 10 === 0) saveProgress(percent, video.currentTime);
+      });
+
+      document.getElementById('quiz-form').onsubmit = async (e) => {
+        e.preventDefault();
+        const form = new FormData(e.target);
+        const answers = {};
+        for (const [key, value] of form.entries()) answers[key] = value;
+        const result = await api(`/api/quizzes/${data.quiz.id}/submit`, { method:'POST', body: JSON.stringify({ answers }) });
+        document.getElementById('quiz-result').textContent = `점수 ${result.score} / 통과 ${result.passed}`;
+      };
+
+      const assignmentForm = document.getElementById('assignment-form');
+      if (assignmentForm) {
+        assignmentForm.onsubmit = async (e) => {
+          e.preventDefault();
+          const files = document.getElementById('assignment-files').files;
+          const encoded = await Promise.all(Array.from(files).map(f => new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve({ name: f.name, data: reader.result.split(',')[1] });
+            reader.readAsDataURL(f);
+          })));
+          const res = await api(`/api/assignments/${data.assignment.id}/submit`, { method:'POST', body: JSON.stringify({ files: encoded }) });
+          document.getElementById('assignment-status').textContent = `상태: ${res.status}`;
+        };
+      }
+    };
+
+    window.seekTo = (sec) => {
+      const video = document.getElementById('lesson-video');
+      if (video) video.currentTime = sec;
+    };
+
+    const saveProgress = async (percent, lastSec) => {
+      if (!state.lessonData) return;
+      await api('/api/progress', { method:'POST', body: JSON.stringify({ lessonId: state.lessonData.lesson.id, percent, lastSec }) });
+    };
+
+    window.ackSop = async (id) => {
+      await api('/api/admin/sop/ack', { method:'POST', body: JSON.stringify({ sopId: id }) });
+      alert('확인되었습니다');
+    };
+
+    const loadAdmin = async () => {
+      const container = document.getElementById('admin-content');
+      if (state.user.role !== 'ADMIN') { container.innerHTML = '접근 불가'; return; }
+      const data = await api('/api/admin/users');
+      container.innerHTML = `
+        <div class='card'>유저 수: ${data.users.length}</div>
+        <div class='card'>브랜치: ${data.branches.map(b=>b.name).join(', ')}</div>
+      `;
+    };
+
+    const loadCoachPanel = async (target) => {
+      if (state.user.role !== 'COACH') return;
+      const container = target || document.createElement('div');
+      container.className = 'card';
+      container.innerHTML = '<h3>코치 피드백</h3>';
+      const data = await api('/api/submissions');
+      data.submissions.forEach(sub => {
+        const form = document.createElement('form');
+        form.className = 'card';
+        form.innerHTML = `
+          <div>제출 ${sub.id} - 상태 ${sub.status}</div>
+          <input name="scores[ri1]" placeholder="대칭 점수" type="number" min="0" max="5" />
+          <input name="scores[ri2]" placeholder="접착 점수" type="number" min="0" max="5" />
+          <select name="status"><option>IN_REVIEW</option><option>APPROVED</option><option>NEEDS_REWORK</option></select>
+          <select name="feedbackTemplate"><option value="좋습니다">좋습니다</option><option value="다시 연습 필요">다시 연습 필요</option></select>
+          <textarea name="feedbackText" placeholder="추가 메모"></textarea>
+          <button type="submit">피드백 저장</button>
+        `;
+        form.onsubmit = async (e) => {
+          e.preventDefault();
+          const fd = new FormData(form);
+          const scores = { ri1: Number(fd.get('scores[ri1]')||0), ri2: Number(fd.get('scores[ri2]')||0) };
+          await api(`/api/submissions/${sub.id}`, { method:'POST', body: JSON.stringify({ scores, status: fd.get('status'), feedbackTemplate: fd.get('feedbackTemplate'), feedbackText: fd.get('feedbackText') }) });
+          alert('저장됨');
+        };
+        container.appendChild(form);
+      });
+      if (!target) views.dashboard.appendChild(container);
+    };
+
+    const bootstrap = async () => {
+      try {
+        const me = await api('/api/me');
+        state.user = me.user;
+        renderNav();
+        showView('dashboard');
+      } catch (e) {
+        showView('login');
+      }
+    };
+
+    bootstrap();
+  </script>
+</body>
+</html>
