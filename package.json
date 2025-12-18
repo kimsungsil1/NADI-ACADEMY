@@ -1,0 +1,13 @@
+{
+  "name": "nadi-academy",
+  "version": "0.1.0",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/migrate.js --seed",
+    "test": "node scripts/smoke-test.js"
+  },
+  "dependencies": {}
+}
