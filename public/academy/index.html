@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Nadi Beauty Academy</title>
+  <base href="./">
   <style>
     body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
     header { background: #111827; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; }
@@ -62,6 +63,9 @@
 
   <script>
     const state = { user: null, currentLesson: null, lessonData: null };
+    const isPages = location.hostname.endsWith('github.io');
+    const isStatic = isPages || location.search.includes('static-demo');
+    const storageKey = 'nadi-static-store';
 
     const views = {
       login: document.getElementById('login-view'),
@@ -81,7 +85,239 @@
       if (name === 'admin') loadAdmin();
     };
 
+    const staticStore = {
+      db: null,
+      runtime: null,
+      currentUser: null
+    };
+
+    const loadStaticDb = async () => {
+      if (staticStore.db) return;
+      const res = await fetch('./data/db.json');
+      staticStore.db = await res.json();
+      const saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      staticStore.runtime = {
+        progress: saved.progress || [],
+        quizResults: saved.quizResults || [],
+        submissions: saved.submissions || [],
+        recommendations: saved.recommendations || [],
+        sopAcknowledgements: saved.sopAcknowledgements || []
+      };
+      staticStore.currentUser = saved.currentUser || null;
+    };
+
+    const persistStatic = () => {
+      localStorage.setItem(storageKey, JSON.stringify({
+        ...staticStore.runtime,
+        currentUser: staticStore.currentUser
+      }));
+    };
+
+    const requireStaticUser = (roles = []) => {
+      if (!staticStore.currentUser) throw new Error('Unauthenticated');
+      if (roles.length && !roles.includes(staticStore.currentUser.role)) throw new Error('Forbidden');
+      return staticStore.currentUser;
+    };
+
+    const staticCredentials = {
+      'admin@nadi.com': 'admin123',
+      'coach@nadi.com': 'coach123',
+      'owner@nadi.com': 'owner123',
+      'learner@nadi.com': 'learner123'
+    };
+
+    const findLessonBundle = (lessonId) => {
+      const lesson = staticStore.db.lessons.find((l) => l.id === lessonId);
+      const chapters = staticStore.db.chapters.filter((c) => c.lessonId === lessonId);
+      const quiz = staticStore.db.quizzes.find((q) => q.lessonId === lessonId);
+      const questions = quiz ? staticStore.db.questions.filter((qs) => qs.quizId === quiz.id) : [];
+      const assignment = staticStore.db.assignments.find((a) => a.lessonId === lessonId);
+      const progress = staticStore.runtime.progress.find((p) => p.lessonId === lessonId && p.userId === staticStore.currentUser.id) || null;
+      const recommendations = staticStore.runtime.recommendations.filter((r) => r.userId === staticStore.currentUser.id && r.lessonId === lessonId && !r.resolvedAt);
+      const sopDocs = staticStore.db.sopDocuments;
+      return { lesson, chapters, quiz, questions, assignment, progress, recommendations, sopDocs };
+    };
+
+    const staticApi = async (url, options = {}) => {
+      const method = (options.method || 'GET').toUpperCase();
+      const body = options.body ? JSON.parse(options.body) : {};
+      await loadStaticDb();
+
+      if (url === '/api/login' && method === 'POST') {
+        const { email, password } = body;
+        const user = staticStore.db.users.find((u) => u.email === email);
+        if (!user || staticCredentials[email] !== password) throw new Error('Invalid credentials');
+        staticStore.currentUser = { id: user.id, name: user.name, role: user.role, branchId: user.branchId };
+        persistStatic();
+        return { user: staticStore.currentUser };
+      }
+
+      if (url === '/api/logout' && method === 'POST') {
+        staticStore.currentUser = null;
+        persistStatic();
+        return { ok: true };
+      }
+
+      if (url === '/api/me' && method === 'GET') {
+        const user = requireStaticUser();
+        return { user };
+      }
+
+      if (url.startsWith('/api/courses') && method === 'GET') {
+        const user = requireStaticUser(['ADMIN', 'COACH', 'LEARNER', 'OWNER']);
+        const queryIndex = url.indexOf('?');
+        const keyword = queryIndex >= 0 ? decodeURIComponent(url.slice(queryIndex + 3)) : '';
+        let courses = staticStore.db.courses.map((c) => ({ ...c, lessons: staticStore.db.lessons.filter((l) => l.courseId === c.id) }));
+        if (keyword) {
+          const search = keyword.toLowerCase();
+          courses = courses.filter((c) => c.title.toLowerCase().includes(search) || c.lessons.some((l) => l.tags.some((t) => t.toLowerCase().includes(search))));
+        }
+        return { courses };
+      }
+
+      if (url.startsWith('/api/lessons/') && method === 'GET') {
+        requireStaticUser(['ADMIN', 'COACH', 'LEARNER', 'OWNER']);
+        const lessonId = url.split('/').pop();
+        const bundle = findLessonBundle(lessonId);
+        if (!bundle.lesson) throw new Error('Not found');
+        return bundle;
+      }
+
+      if (url.startsWith('/api/quizzes/') && method === 'POST') {
+        const user = requireStaticUser(['LEARNER']);
+        const quizId = url.split('/').pop();
+        const quiz = staticStore.db.quizzes.find((q) => q.id === quizId);
+        if (!quiz) throw new Error('Not found');
+        const questions = staticStore.db.questions.filter((q) => q.quizId === quizId);
+        let score = 0;
+        questions.forEach((q) => { if ((body.answers || {})[q.id] === q.answer) score += 20; });
+        const passed = score >= quiz.passScore;
+        staticStore.runtime.quizResults.push({ id: `qr-${Date.now()}`, quizId, userId: user.id, score, passed, createdAt: new Date().toISOString() });
+        const lesson = staticStore.db.lessons.find((l) => l.id === quiz.lessonId);
+        if (!passed && lesson) {
+          staticStore.runtime.recommendations.push({ id: `rec-${Date.now()}`, userId: user.id, lessonId: lesson.id, reason: '퀴즈 점수 미달', createdAt: new Date().toISOString(), resolvedAt: null });
+        }
+        persistStatic();
+        return { score, passed };
+      }
+
+      if (url === '/api/progress' && method === 'POST') {
+        const user = requireStaticUser(['LEARNER']);
+        const { lessonId, percent, lastSec, completedAt } = body;
+        const existing = staticStore.runtime.progress.find((p) => p.lessonId === lessonId && p.userId === user.id);
+        if (existing) {
+          existing.percent = percent;
+          existing.lastSec = lastSec;
+          existing.completedAt = completedAt || existing.completedAt;
+        } else {
+          staticStore.runtime.progress.push({ id: `prog-${Date.now()}`, lessonId, userId: user.id, percent, lastSec, completedAt: completedAt || null });
+        }
+        persistStatic();
+        return { ok: true };
+      }
+
+      if (url.startsWith('/api/assignments/') && method === 'POST') {
+        const user = requireStaticUser(['LEARNER']);
+        const assignmentId = url.split('/')[3];
+        const storedFiles = (body.files || []).map((f) => ({ name: f.name, preview: true }));
+        staticStore.runtime.submissions.push({ id: `sub-${Date.now()}`, assignmentId, userId: user.id, files: storedFiles, status: 'SUBMITTED', createdAt: new Date().toISOString() });
+        persistStatic();
+        return { status: 'SUBMITTED' };
+      }
+
+      if (url === '/api/submissions' && method === 'GET') {
+        requireStaticUser(['COACH', 'ADMIN']);
+        return { submissions: staticStore.runtime.submissions };
+      }
+
+      if (url.startsWith('/api/submissions/') && method === 'POST') {
+        requireStaticUser(['COACH']);
+        const submissionId = url.split('/').pop();
+        const submission = staticStore.runtime.submissions.find((s) => s.id === submissionId);
+        if (submission) {
+          submission.status = body.status || submission.status;
+          submission.feedbackTemplate = body.feedbackTemplate || submission.feedbackTemplate;
+          submission.feedbackText = body.feedbackText || submission.feedbackText;
+        }
+        persistStatic();
+        return { ok: true, totalScore: 0 };
+      }
+
+      if (url === '/api/recommendations' && method === 'GET') {
+        const user = requireStaticUser(['LEARNER']);
+        const items = staticStore.runtime.recommendations.filter((r) => r.userId === user.id && !r.resolvedAt);
+        return { recommendations: items };
+      }
+
+      if (url === '/api/recommendations/resolve' && method === 'POST') {
+        const user = requireStaticUser(['LEARNER']);
+        const target = staticStore.runtime.recommendations.find((r) => r.id === body.id && r.userId === user.id);
+        if (target) target.resolvedAt = new Date().toISOString();
+        persistStatic();
+        return { ok: true };
+      }
+
+      if (url === '/api/dashboard' && method === 'GET') {
+        const user = requireStaticUser(['LEARNER', 'OWNER', 'ADMIN']);
+        if (user.role === 'LEARNER') {
+          const myProgress = staticStore.runtime.progress.filter((p) => p.userId === user.id);
+          const submissions = staticStore.runtime.submissions.filter((s) => s.userId === user.id);
+          const myQuiz = staticStore.runtime.quizResults.filter((q) => q.userId === user.id);
+          const recs = staticStore.runtime.recommendations.filter((r) => r.userId === user.id && !r.resolvedAt);
+          return { progress: myProgress, submissions, quizResults: myQuiz, recommendations: recs };
+        }
+        if (user.role === 'OWNER') {
+          const branchUsers = staticStore.db.users.filter((u) => u.branchId === user.branchId && u.role === 'LEARNER');
+          const userIds = branchUsers.map((u) => u.id);
+          const branchProgress = staticStore.runtime.progress.filter((p) => userIds.includes(p.userId));
+          const branchQuiz = staticStore.runtime.quizResults.filter((q) => userIds.includes(q.userId));
+          const recs = staticStore.runtime.recommendations.filter((r) => userIds.includes(r.userId) && !r.resolvedAt);
+          const submissions = staticStore.runtime.submissions.filter((s) => userIds.includes(s.userId));
+          return {
+            learnerCount: branchUsers.length,
+            completionRate: branchProgress.length ? Math.round((branchProgress.filter((p) => p.completedAt).length / branchProgress.length) * 100) : 0,
+            avgQuiz: branchQuiz.length ? Math.round(branchQuiz.reduce((a, b) => a + b.score, 0) / branchQuiz.length) : 0,
+            pendingSubmissions: submissions.filter((s) => s.status !== 'APPROVED').length,
+            recommendations: recs
+          };
+        }
+        if (user.role === 'ADMIN') {
+          const branchStats = staticStore.db.branches.map((b) => {
+            const branchUsers = staticStore.db.users.filter((u) => u.branchId === b.id && u.role === 'LEARNER');
+            const userIds = branchUsers.map((u) => u.id);
+            const branchProgress = staticStore.runtime.progress.filter((p) => userIds.includes(p.userId));
+            const branchQuiz = staticStore.runtime.quizResults.filter((q) => userIds.includes(q.userId));
+            const recs = staticStore.runtime.recommendations.filter((r) => userIds.includes(r.userId) && !r.resolvedAt);
+            const submissions = staticStore.runtime.submissions.filter((s) => userIds.includes(s.userId));
+            return {
+              branch: b,
+              completionRate: branchProgress.length ? Math.round((branchProgress.filter((p) => p.completedAt).length / branchProgress.length) * 100) : 0,
+              avgQuiz: branchQuiz.length ? Math.round(branchQuiz.reduce((a, b) => a + b.score, 0) / branchQuiz.length) : 0,
+              pendingSubmissions: submissions.filter((s) => s.status !== 'APPROVED').length,
+              recommendations: recs.length
+            };
+          });
+          return { branchStats, users: staticStore.db.users };
+        }
+      }
+
+      if (url === '/api/admin/users' && method === 'GET') {
+        requireStaticUser(['ADMIN']);
+        return { users: staticStore.db.users, branches: staticStore.db.branches };
+      }
+
+      if (url === '/api/admin/sop/ack' && method === 'POST') {
+        const user = requireStaticUser(['LEARNER']);
+        staticStore.runtime.sopAcknowledgements.push({ id: `ack-${Date.now()}`, sopId: body.sopId, userId: user.id, completedAt: new Date().toISOString() });
+        persistStatic();
+        return { ok: true };
+      }
+
+      throw new Error('Unsupported in static mode');
+    };
+
     const api = async (url, options = {}) => {
+      if (isStatic) return staticApi(url, options);
       const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, credentials: 'include', ...options });
       if (!res.ok) throw new Error('요청 실패');
       return res.json();
@@ -92,7 +328,7 @@
       nav.innerHTML = `
         <a onclick="showView('dashboard')">대시보드</a>
         <a onclick="showView('courses')">코스</a>
-        ${state.user.role === 'ADMIN' ? '<a onclick="showView(\'admin\')">관리</a>' : ''}
+        ${state.user.role === 'ADMIN' ? '<a onclick=\'showView(\'admin\')\'>관리</a>' : ''}
         <a id="logout-btn" href="#">로그아웃</a>
       `;
       document.getElementById('logout-btn').onclick = async (e) => {
@@ -236,7 +472,7 @@
       video.addEventListener('timeupdate', () => {
         const percent = Math.round((video.currentTime / video.duration) * 100);
         document.getElementById('progress-display').textContent = `${percent}%`;
-        if (percent % 10 === 0) saveProgress(percent, video.currentTime);
+        if (percent % 10 === 0 && !isNaN(percent)) saveProgress(percent, video.currentTime);
       });
 
       document.getElementById('quiz-form').onsubmit = async (e) => {
