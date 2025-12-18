@@ -4,6 +4,8 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
+    "build": "npm run build:pages",
+    "build:pages": "node scripts/build-pages.js",
     "dev": "node server.js",
     "migrate": "node scripts/migrate.js",
     "seed": "node scripts/migrate.js --seed",

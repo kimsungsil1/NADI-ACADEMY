@@ -2,7 +2,7 @@
 
 간단한 Node HTTP 서버와 정적 프론트엔드(SPA)로 아카데미 MVP를 제공합니다. 데이터는 `data/db.json`에 저장됩니다.
 
-## 실행
+## 로컬 서버 실행 (동적 API 포함)
 1. Node 18+ 설치
 2. 초기 시드 생성
 ```bash
@@ -13,6 +13,16 @@ npm run migrate
 npm run dev
 ```
 4. 브라우저에서 `http://localhost:3000/academy` 접속
+
+## GitHub Pages 정적 데모
+- Pages 베이스 경로는 `/NADI-ACADEMY/` 입니다.
+- 정적 데모에서는 API 서버가 없으므로, 브라우저 `localStorage`에 진행률/퀴즈/과제 제출/추천 등이 저장됩니다.
+- 빌드 & 배포 흐름
+  ```bash
+  npm run build          # public/academy + data/db.json 을 dist/로 복사하며 404.html 동봉
+  ```
+  - GitHub Actions 워크플로우(`.github/workflows/pages.yml`)가 `main` 브랜치 푸시 시 위 스크립트를 실행하고 Pages에 업로드합니다.
+  - GitHub Pages 설정은 "GitHub Actions" 소스로 지정합니다.
 
 ## 기본 계정
 - ADMIN: admin@nadi.com / admin123
